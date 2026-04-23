@@ -44,43 +44,44 @@ def fmt_budget(c):
         return f"zł{int(lb)/100:,.0f} (lifetime)"
     return "-"
 
-@st.cache_data(ttl=300)
 def load_accounts(token):
     FacebookAdsApi.init(access_token=token)
     me = User(fbid="me")
-    accounts = list(me.get_ad_accounts(fields=["id","name","account_status","currency","timezone_name"]))
-    return accounts
+    accounts = me.get_ad_accounts(fields=["id","name","account_status","currency","timezone_name"])
+    return [{"id": a["id"], "name": a["name"], "account_status": a.get("account_status"),
+             "currency": a.get("currency"), "timezone_name": a.get("timezone_name")} for a in accounts]
 
-@st.cache_data(ttl=300)
 def load_campaign_insights(account_id, token, date_preset):
     FacebookAdsApi.init(access_token=token)
     acc = AdAccount(account_id)
-    insights = list(acc.get_insights(
+    insights_raw = acc.get_insights(
         fields=["campaign_id","campaign_name","impressions","clicks","spend",
                 "reach","ctr","cpc","cpm","frequency","actions","cost_per_action_type"],
         params={"date_preset": date_preset, "level": "campaign"},
-    ))
-    campaigns = list(acc.get_campaigns(fields=["id","name","daily_budget","lifetime_budget","status"]))
+    )
+    insights = [dict(i) for i in insights_raw]
+    campaigns_raw = acc.get_campaigns(fields=["id","name","daily_budget","lifetime_budget","status"])
+    campaigns = [dict(c) for c in campaigns_raw]
     return insights, campaigns
 
-@st.cache_data(ttl=300)
 def load_adset_insights(account_id, token, date_preset):
     FacebookAdsApi.init(access_token=token)
     acc = AdAccount(account_id)
-    return list(acc.get_insights(
+    raw = acc.get_insights(
         fields=["campaign_name","adset_name","impressions","clicks","spend","reach","ctr","cpc","actions"],
         params={"date_preset": date_preset, "level": "adset"},
-    ))
+    )
+    return [dict(i) for i in raw]
 
-@st.cache_data(ttl=300)
 def load_ad_insights(account_id, token, date_preset):
     FacebookAdsApi.init(access_token=token)
     acc = AdAccount(account_id)
-    return list(acc.get_insights(
+    raw = acc.get_insights(
         fields=["campaign_name","adset_name","ad_name","impressions","clicks","spend",
                 "reach","ctr","cpc","cpm","frequency","actions"],
         params={"date_preset": date_preset, "level": "ad"},
-    ))
+    )
+    return [dict(i) for i in raw]
 
 # --- UI ---
 st.title("📊 FastLine Ads Dashboard")
@@ -116,10 +117,9 @@ with st.sidebar:
     date_preset = date_options[selected_period]
 
     if st.button("🔄 Оновити дані", use_container_width=True):
-        st.cache_data.clear()
         st.rerun()
 
-    st.caption("Дані оновлюються автоматично кожні 5 хвилин")
+    st.caption("Дані оновлюються при кожному запиті")
 
 # Tabs
 tab1, tab2, tab3 = st.tabs(["📁 Кампанії", "🗂 Групи оголошень", "🎯 Оголошення"])
@@ -135,14 +135,12 @@ with tab1:
 
     insights_map = {i["campaign_id"]: i for i in insights}
 
-    # Metrics
     total_spend = sum(float(i.get("spend", 0)) for i in insights)
     total_clicks = sum(int(float(i.get("clicks", 0))) for i in insights)
     total_impr = sum(int(float(i.get("impressions", 0))) for i in insights)
     total_leads = sum(get_leads(i.get("actions", [])) for i in insights)
     avg_ctr = total_clicks / total_impr * 100 if total_impr else 0
     avg_cpc = total_spend / total_clicks if total_clicks else 0
-    avg_cpl = total_spend / total_leads if total_leads else 0
 
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     col1.metric("Витрати", f"zł{total_spend:,.2f}")
@@ -154,7 +152,6 @@ with tab1:
 
     st.divider()
 
-    # Campaign table
     rows = []
     for c in campaigns:
         cid = c["id"]
@@ -192,17 +189,13 @@ with tab1:
     if active_only:
         df = df[df["Статус"] == "ACTIVE"]
 
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True,
+    st.dataframe(df, use_container_width=True, hide_index=True,
         column_config={
             "Витрати (zł)": st.column_config.NumberColumn(format="zł%.2f"),
             "CPC (zł)": st.column_config.NumberColumn(format="zł%.2f"),
             "CPL (zł)": st.column_config.NumberColumn(format="zł%.2f"),
             "CTR (%)": st.column_config.NumberColumn(format="%.2f%%"),
-        }
-    )
+        })
 
     if not df.empty:
         st.bar_chart(df.set_index("Кампанія")["Витрати (zł)"])
@@ -240,17 +233,13 @@ with tab2:
         if campaign_filter:
             df2 = df2[df2["Кампанія"].isin(campaign_filter)]
 
-    st.dataframe(
-        df2,
-        use_container_width=True,
-        hide_index=True,
+    st.dataframe(df2, use_container_width=True, hide_index=True,
         column_config={
             "Витрати (zł)": st.column_config.NumberColumn(format="zł%.2f"),
             "CPC (zł)": st.column_config.NumberColumn(format="zł%.2f"),
             "CPL (zł)": st.column_config.NumberColumn(format="zł%.2f"),
             "CTR (%)": st.column_config.NumberColumn(format="%.2f%%"),
-        }
-    )
+        })
 
 # --- TAB 3: ADS ---
 with tab3:
@@ -288,15 +277,11 @@ with tab3:
         if camp_filter:
             df3 = df3[df3["Кампанія"].isin(camp_filter)]
 
-    st.dataframe(
-        df3,
-        use_container_width=True,
-        hide_index=True,
+    st.dataframe(df3, use_container_width=True, hide_index=True,
         column_config={
             "Витрати (zł)": st.column_config.NumberColumn(format="zł%.2f"),
             "CPC (zł)": st.column_config.NumberColumn(format="zł%.2f"),
             "CPM (zł)": st.column_config.NumberColumn(format="zł%.2f"),
             "CPL (zł)": st.column_config.NumberColumn(format="zł%.2f"),
             "CTR (%)": st.column_config.NumberColumn(format="%.2f%%"),
-        }
-    )
+        })

@@ -8,12 +8,6 @@ from facebook_business.adobjects.user import User
 
 st.set_page_config(page_title="FastLine Ads Dashboard", page_icon="📊", layout="wide")
 
-def fmt(val, sym="zł"):
-    try:
-        return f"{sym}{float(val):,.2f}"
-    except:
-        return "-"
-
 def get_leads(actions):
     if not actions:
         return 0
@@ -177,7 +171,6 @@ def parse_google_ad_groups(results):
     return rows
 
 st.title("📊 FastLine Ads Dashboard")
-
 ACCESS_TOKEN = st.secrets.get("META_ACCESS_TOKEN", os.getenv("META_ACCESS_TOKEN", ""))
 
 DATE_OPTIONS = {
@@ -193,7 +186,6 @@ with st.sidebar:
     st.header("Налаштування")
     selected_period = st.selectbox("Період", list(DATE_OPTIONS.keys()), index=2)
     meta_date_preset, google_date_range = DATE_OPTIONS[selected_period]
-
     st.divider()
     st.subheader("Meta Ads")
     meta_account_id = None
@@ -206,12 +198,10 @@ with st.sidebar:
                 meta_account_id = account_options[selected_name]
         except Exception as e:
             st.warning(f"Meta: {e}")
-
     st.divider()
     st.subheader("Google Ads")
     google_account_label = st.selectbox("Акаунт Google", list(GOOGLE_ACCOUNTS.keys()))
     google_customer_id = GOOGLE_ACCOUNTS[google_account_label]
-
     if st.button("🔄 Оновити дані", use_container_width=True):
         st.rerun()
 
@@ -219,12 +209,11 @@ main_tab_meta, main_tab_google = st.tabs(["📘 Meta Ads", "🟢 Google Ads"])
 
 with main_tab_meta:
     if not ACCESS_TOKEN:
-        st.error("Токен не знайдено. Додай META_ACCESS_TOKEN у Streamlit Secrets.")
+        st.error("Токен не знайдено.")
     elif not meta_account_id:
         st.warning("Оберіть акаунт Meta у боковій панелі.")
     else:
         tab1, tab2, tab3 = st.tabs(["📁 Кампанії", "🗂 Групи оголошень", "🎯 Оголошення"])
-
         with tab1:
             with st.spinner("Завантаження..."):
                 try:
@@ -232,7 +221,6 @@ with main_tab_meta:
                 except Exception as e:
                     st.error(f"Помилка: {e}")
                     insights, campaigns = [], []
-
             insights_map = {i["campaign_id"]: i for i in insights}
             total_spend = sum(float(i.get("spend", 0)) for i in insights)
             total_clicks = sum(int(float(i.get("clicks", 0))) for i in insights)
@@ -240,7 +228,6 @@ with main_tab_meta:
             total_leads = sum(get_leads(i.get("actions", [])) for i in insights)
             avg_ctr = total_clicks / total_impr * 100 if total_impr else 0
             avg_cpc = total_spend / total_clicks if total_clicks else 0
-
             col1, col2, col3, col4, col5, col6 = st.columns(6)
             col1.metric("Витрати", f"zł{total_spend:,.2f}")
             col2.metric("Покази", f"{total_impr:,}")
@@ -249,7 +236,6 @@ with main_tab_meta:
             col5.metric("Avg CTR", f"{avg_ctr:.2f}%")
             col6.metric("Avg CPC", f"zł{avg_cpc:.2f}")
             st.divider()
-
             rows = []
             for c in campaigns:
                 cid = c["id"]
@@ -272,11 +258,10 @@ with main_tab_meta:
                     "Ліди": leads, "CPL (zł)": round(cpl, 2) if cpl else None,
                     "Бюджет": fmt_budget(c),
                 })
-
             rows.sort(key=lambda x: x["Витрати (zł)"], reverse=True)
             df = pd.DataFrame(rows)
             active_only = st.checkbox("Тільки активні", value=True, key="m_active")
-            if active_only:
+            if active_only and not df.empty and "Статус" in df.columns:
                 df = df[df["Статус"] == "ACTIVE"]
             st.dataframe(df, use_container_width=True, hide_index=True,
                 column_config={
@@ -285,7 +270,7 @@ with main_tab_meta:
                     "CPL (zł)": st.column_config.NumberColumn(format="zł%.2f"),
                     "CTR (%)": st.column_config.NumberColumn(format="%.2f%%"),
                 })
-            if not df.empty:
+            if not df.empty and "Кампанія" in df.columns:
                 st.bar_chart(df.set_index("Кампанія")["Витрати (zł)"])
 
         with tab2:
@@ -374,7 +359,6 @@ with main_tab_google:
 
         if g_token:
             gtab1, gtab2 = st.tabs(["📁 Кампанії", "🗂 Групи оголошень"])
-
             with gtab1:
                 with st.spinner(f"Завантаження кампаній ({google_account_label})..."):
                     try:
@@ -383,7 +367,6 @@ with main_tab_google:
                     except Exception as e:
                         st.error(f"Помилка: {e}")
                         gc_rows = []
-
                 if gc_rows:
                     df_gc = pd.DataFrame(gc_rows)
                     total_gc_spend = df_gc["Витрати (zł)"].sum()
@@ -392,7 +375,6 @@ with main_tab_google:
                     total_gc_conv = df_gc["Конверсії"].sum()
                     avg_gc_ctr = total_gc_clicks / total_gc_impr * 100 if total_gc_impr else 0
                     avg_gc_cpc = total_gc_spend / total_gc_clicks if total_gc_clicks else 0
-
                     col1, col2, col3, col4, col5, col6 = st.columns(6)
                     col1.metric("Витрати", f"zł{total_gc_spend:,.2f}")
                     col2.metric("Покази", f"{int(total_gc_impr):,}")
@@ -401,9 +383,8 @@ with main_tab_google:
                     col5.metric("Avg CTR", f"{avg_gc_ctr:.2f}%")
                     col6.metric("Avg CPC", f"zł{avg_gc_cpc:.2f}")
                     st.divider()
-
                     gc_active = st.checkbox("Тільки активні", value=True, key="g_active")
-                    if gc_active:
+                    if gc_active and not df_gc.empty and "Статус" in df_gc.columns:
                         df_gc = df_gc[df_gc["Статус"] == "ENABLED"]
                     st.dataframe(df_gc, use_container_width=True, hide_index=True,
                         column_config={
@@ -411,7 +392,7 @@ with main_tab_google:
                             "CPC (zł)": st.column_config.NumberColumn(format="zł%.2f"),
                             "CTR (%)": st.column_config.NumberColumn(format="%.2f%%"),
                         })
-                    if not df_gc.empty:
+                    if not df_gc.empty and "Кампанія" in df_gc.columns:
                         st.bar_chart(df_gc.set_index("Кампанія")["Витрати (zł)"])
                 else:
                     st.info("Немає даних для обраного періоду.")
@@ -424,7 +405,6 @@ with main_tab_google:
                     except Exception as e:
                         st.error(f"Помилка: {e}")
                         gag_rows = []
-
                 if gag_rows:
                     df_gag = pd.DataFrame(gag_rows)
                     cf_g = st.multiselect("Фільтр по кампанії", df_gag["Кампанія"].unique(), key="g_ag_filter")

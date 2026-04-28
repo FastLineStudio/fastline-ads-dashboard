@@ -118,6 +118,9 @@ GAQL_DATE_MAP = {
 }
 
 def google_get_access_token():
+        direct_token = st.secrets.get("GOOGLE_ACCESS_TOKEN", "")
+    if direct_token:
+        return direct_token
     client_id = st.secrets.get("GOOGLE_CLIENT_ID", "")
     client_secret = st.secrets.get("GOOGLE_CLIENT_SECRET", "")
     refresh_token = st.secrets.get("GOOGLE_REFRESH_TOKEN", "")

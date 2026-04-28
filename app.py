@@ -140,7 +140,7 @@ def google_get_access_token():
 def google_query(customer_id, query, access_token):
     dev_token = st.secrets.get("GOOGLE_DEVELOPER_TOKEN", "")
     mcc_id = st.secrets.get("GOOGLE_MCC_ID", "7329460296")
-    url = f"https://googleads.googleapis.com/v17/customers/{customer_id}/googleAds:search"
+    url = f"https://googleads.googleapis.com/v19/customers/{customer_id}/googleAds:search"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "developer-token": dev_token,

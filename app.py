@@ -118,9 +118,11 @@ GAQL_DATE_MAP = {
 }
 
 def google_get_access_token():
+    # Спочатку пробуємо прямий access_token (якщо є в secrets)
     direct_token = st.secrets.get("GOOGLE_ACCESS_TOKEN", "")
     if direct_token:
         return direct_token
+    # Якщо немає — використовуємо refresh_token
     client_id = st.secrets.get("GOOGLE_CLIENT_ID", "")
     client_secret = st.secrets.get("GOOGLE_CLIENT_SECRET", "")
     refresh_token = st.secrets.get("GOOGLE_REFRESH_TOKEN", "")
@@ -182,6 +184,23 @@ def load_google_campaigns(customer_id, access_token, gaql_date_range):
     return google_query(customer_id, query, access_token)
 
 @st.cache_data(ttl=300, show_spinner=False)
+def load_google_conversions(customer_id, access_token, gaql_date_range):
+    query = f"""
+        SELECT
+            campaign.name,
+            campaign.status,
+            segments.conversion_action_name,
+            metrics.conversions,
+            metrics.cost_micros,
+            metrics.conversions_value
+        FROM campaign
+        WHERE segments.date DURING {gaql_date_range}
+          AND metrics.conversions > 0
+        ORDER BY metrics.conversions DESC
+    """
+    return google_query(customer_id, query, access_token)
+
+@st.cache_data(ttl=300, show_spinner=False)
 def load_google_ad_groups(customer_id, access_token, gaql_date_range):
     query = f"""
         SELECT
@@ -212,6 +231,7 @@ def parse_google_campaign_rows(results):
         impressions = int(metrics.get("impressions", 0))
         ctr = float(metrics.get("ctr", 0)) * 100
         conversions = float(metrics.get("conversions", 0))
+        cost_per_conv = round(cost / conversions, 2) if conversions > 0 else None
         rows.append({
             "Кампанія": campaign.get("name", ""),
             "Статус": campaign.get("status", ""),
@@ -221,6 +241,7 @@ def parse_google_campaign_rows(results):
             "CTR (%)": round(ctr, 2),
             "CPC (zł)": round(avg_cpc, 2),
             "Конверсії": round(conversions, 2),
+            "Ціна/конв. (zł)": cost_per_conv,
         })
     return rows
 
@@ -520,8 +541,8 @@ with main_tab_google:
         if google_token_error:
             st.error(f"Не вдалося отримати токен Google: {google_token_error}")
         else:
-            google_tab_campaigns, google_tab_adgroups = st.tabs(
-                ["📁 Кампанії", "🗂 Групи оголошень"]
+            google_tab_campaigns, google_tab_adgroups, google_tab_conversions = st.tabs(
+                ["📁 Кампанії", "🗂 Групи оголошень", "🎯 Конверсії"]
             )
 
             # --- GOOGLE: CAMPAIGNS ---
@@ -569,6 +590,7 @@ with main_tab_google:
                             "CPC (zł)": st.column_config.NumberColumn(format="zł%.2f"),
                             "CTR (%)": st.column_config.NumberColumn(format="%.2f%%"),
                             "Конверсії": st.column_config.NumberColumn(format="%.2f"),
+                            "Ціна/конв. (zł)": st.column_config.NumberColumn(format="zł%.2f"),
                         }
                     )
 
@@ -612,3 +634,77 @@ with main_tab_google:
                     )
                 else:
                     st.info("Немає даних для обраного періоду.")
+
+            # --- GOOGLE: CONVERSIONS ---
+            with google_tab_conversions:
+                with st.spinner(f"Завантаження конверсій Google Ads ({google_account_label})..."):
+                    try:
+                        g_conv_results = load_google_conversions(
+                            google_customer_id, google_access_token, google_date_range
+                        )
+                    except Exception as e:
+                        st.error(f"Помилка завантаження конверсій Google: {e}")
+                        g_conv_results = []
+
+                if g_conv_results:
+                    conv_rows = []
+                    for r in g_conv_results:
+                        campaign = r.get("campaign", {})
+                        metrics = r.get("metrics", {})
+                        segments = r.get("segments", {})
+                        cost = int(metrics.get("costMicros", 0)) / 1_000_000
+                        conversions = float(metrics.get("conversions", 0))
+                        conv_value = float(metrics.get("conversionsValue", 0))
+                        cost_per_conv = round(cost / conversions, 2) if conversions > 0 else None
+                        conv_rows.append({
+                            "Кампанія": campaign.get("name", ""),
+                            "Тип конверсії": segments.get("conversionActionName", ""),
+                            "Конверсії": round(conversions, 2),
+                            "Витрати (zł)": round(cost, 2),
+                            "Ціна/конв. (zł)": cost_per_conv,
+                            "Цінність конв.": round(conv_value, 2) if conv_value else None,
+                        })
+
+                    conv_rows.sort(key=lambda x: x["Конверсії"], reverse=True)
+                    df_conv = pd.DataFrame(conv_rows)
+
+                    # Summary metrics
+                    total_conv = df_conv["Конверсії"].sum()
+                    total_conv_spend = df_conv["Витрати (zł)"].sum()
+                    avg_cpa = total_conv_spend / total_conv if total_conv else 0
+                    unique_types = df_conv["Тип конверсії"].nunique()
+
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Всього конверсій", f"{total_conv:.1f}")
+                    col2.metric("Середня ціна/конв.", f"zł{avg_cpa:.2f}")
+                    col3.metric("Типів конверсій", unique_types)
+                    col4.metric("Витрати", f"zł{total_conv_spend:,.2f}")
+
+                    st.divider()
+
+                    conv_type_filter = st.multiselect(
+                        "Фільтр по типу конверсії",
+                        df_conv["Тип конверсії"].unique(),
+                        key="google_conv_type_filter"
+                    )
+                    if conv_type_filter:
+                        df_conv = df_conv[df_conv["Тип конверсії"].isin(conv_type_filter)]
+
+                    st.dataframe(
+                        df_conv,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Витрати (zł)": st.column_config.NumberColumn(format="zł%.2f"),
+                            "Ціна/конв. (zł)": st.column_config.NumberColumn(format="zł%.2f"),
+                            "Конверсії": st.column_config.NumberColumn(format="%.2f"),
+                            "Цінність конв.": st.column_config.NumberColumn(format="%.2f"),
+                        }
+                    )
+
+                    st.divider()
+                    st.subheader("Конверсії по типах")
+                    df_by_type = df_conv.groupby("Тип конверсії")["Конверсії"].sum().sort_values(ascending=False)
+                    st.bar_chart(df_by_type)
+                else:
+                    st.info("Немає даних про конверсії для обраного періоду.")
